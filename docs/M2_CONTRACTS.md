@@ -52,11 +52,42 @@ consent restrictions must be enforced in the database, not just in routes.
 ## M2 verification handoff
 
 - `pnpm test`: 60 tests passed; `pnpm typecheck` and `pnpm build` passed.
-- The migration, idempotent seed, and `supabase/tests/policies.sql` passed in
-  PGlite 0.5.16 using a minimal test-only `auth.users` and `auth.uid()` shim.
-- The migration has **not** been applied to a Supabase project, and the SQL
-  tests have **not** run against Supabase Auth or its PostgREST API. Repeat the
-  documented `psql` checks on a dedicated test database before relying on
-  those integrations. Docker daemon access was unavailable in this session.
+- The `m2_persistence` migration was applied to the linked hosted Supabase
+  project `Onconourish`. The synthetic seed was applied; it created 3 patients,
+  5 profiles, 16 check-ins, 24 offered actions, and 23 food items.
+- `supabase/tests/policies.sql` assertions were executed against that
+  project's PostgreSQL database through the Supabase SQL tool, using the
+  script's simulated JWT subject claims. They passed and the test transaction
+  rolled back its fixtures. This verifies database RLS behavior for those
+  assertions, but is not an end-to-end sign-in or PostgREST/API integration
+  test.
+- Supabase Security Advisor reports the `measurement_summary` view as
+  `SECURITY DEFINER` and reports the authorization helper functions as
+  executable by API roles. This is an open security finding; do not use this
+  schema with real patient data. Review the view's intended cohort scope,
+  change it to invoker-safe access, move callable helpers out of the exposed
+  API schema (or otherwise prevent RPC access), then rerun the SQL policy
+  tests and Security Advisor.
+- Supabase also reports leaked-password protection as disabled for Auth. This
+  is a project Auth setting, separate from the migration.
 - The brief requests 24 foods, but M1 found only 23 in the prototype; the seed
   intentionally uses those 23 without inventing clinical data.
+
+## M3 patient UI handoff to M4
+
+The patient demo route uses server actions in `src/app/patient/actions.ts`.
+Those actions explicitly select the in-memory demo repository and are fixed to
+the synthetic Layla record. They are not authenticated API routes and must not
+be treated as an authorization boundary. Demo state is process-local, resets on
+restart, and may not be shared across deployments or serverless isolates.
+
+M4 owns the authenticated API routes. When replacing the M3 demo calls, keep
+the patient UI on the repository and engine contracts, derive identity from the
+server-side session rather than client-supplied IDs, and preserve explicit
+validation and error responses. Add the authorized alert writer required for
+the end-to-end check-in-to-clinician flow; the shared repository still exposes
+alert reads only. Do not expose a service-role key to the browser.
+
+New Arabic UI copy in M3 is machine-drafted and requires native-speaker and
+clinical review before use. The linked Supabase project has open Security
+Advisor findings recorded above; do not use it with real patient data.

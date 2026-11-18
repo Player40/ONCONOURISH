@@ -91,8 +91,12 @@ pnpm typecheck
 pnpm build
 ```
 
-The home page is only a build scaffold; patient and clinician UI, API routes,
-and evaluation reporting are not yet implemented.
+The patient demo is available at `/login` and `/patient`. It opens the synthetic
+Layla scenario at day 9, including the missed-day return flow from the
+prototype. Patient interactions use server actions over the in-memory demo
+repository; this is a synthetic walkthrough, not an authenticated sign-in flow.
+The demo state is temporary and may reset when the server restarts. Clinician
+UI, authenticated API routes, and evaluation reporting are not yet implemented.
 
 ## M2 persistence and demo setup
 
@@ -112,6 +116,12 @@ access token when Supabase is configured raises an error rather than silently
 falling back. The in-memory demo repository is shared only within one server
 runtime; it is reset on restart and is neither durable nor a security
 boundary. It is not suitable for real patient data.
+
+The M3 patient route explicitly selects demo mode and is fixed to the synthetic
+Layla record, even if Supabase settings are present. Its server actions are not
+an authorization boundary; M4 must replace them with authenticated API routes.
+New Arabic UI copy is machine-drafted and requires native-speaker and clinical
+review.
 
 To apply the migration, generate synthetic seed data, and run SQL tests, use
 **only a dedicated disposable Supabase test project** or a suitable local
