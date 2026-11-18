@@ -103,7 +103,7 @@ export const GUARDRAILS: readonly Guardrail[] = [
       ar: "الأسئلة عن التشخيص أو الفحوصات أو التوقعات يجيب عنها فريق الرعاية. يدعم هذا التطبيق الأكل والشرب فقط.",
     },
     patterns: [
-      /(do i have|is it cancer|has it spread|my scan|prognosis|how long (do|will) i)/i,
+      /(do i have|is it cancer|has (it|my cancer|the cancer) spread|my scan|prognosis|how long (do|will) i)/i,
       /(هل.*(سرطان|ورم)|هل انتشر|نتيجة.*(الفحص|التصوير)|التوقعات|كم.*أعيش)/i,
     ],
     arabicNeedsReview: true,

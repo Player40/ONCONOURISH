@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition, type FormEvent } from "react";
 import Link from "next/link";
+import { signOut } from "@/app/login/actions";
 import {
   buildDailyPlan,
   evaluateCheckIn,
@@ -17,7 +18,9 @@ import { FOODS } from "@/data/foods";
 import { RED_FLAGS, SYMPTOMS } from "@/data/symptoms";
 import { ACTION_IDS, BARRIER_IDS, RED_FLAG_IDS, SYMPTOM_IDS } from "@/engine/types";
 import type { ActionId, BarrierId, CheckIn, Locale } from "@/engine/types";
+import { answerQuestion, type QuestionResponse } from "@/lib/question-workflow";
 import type { PatientSnapshot } from "./service";
+import { parseOfflineCheckInDraft } from "./offline-draft";
 import {
   requestRamadanAction,
   saveActionAction,
@@ -155,6 +158,10 @@ function selectedBarrier(snapshot: PatientSnapshot, day: number): BarrierId | un
   return snapshot.barriers.find((record) => record.day === day)?.barrier;
 }
 
+function getDraftStorageKey(patientId: string, day: number): string {
+  return `onconourish:checkin:${patientId}:${day}`;
+}
+
 export default function PatientExperience({ initialSnapshot }: { readonly initialSnapshot: PatientSnapshot }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [selectedDay, setSelectedDay] = useState(initialSnapshot.activeDay);
@@ -162,13 +169,18 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
   const [draft, setDraft] = useState<CheckIn | undefined>(
     () => initialSnapshot.days[initialSnapshot.activeDay - 1]?.checkIn ?? undefined,
   );
+  const [draftDirty, setDraftDirty] = useState(false);
   const [editing, setEditing] = useState(Boolean(draft));
   const [controlsOpen, setControlsOpen] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [questionResponse, setQuestionResponse] = useState<QuestionResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const activeDay = snapshot.days[selectedDay - 1];
+  const draftStorageKey = getDraftStorageKey(snapshot.patient.id, draft?.day ?? selectedDay);
+  const selectedDayDraftStorageKey = getDraftStorageKey(snapshot.patient.id, selectedDay);
   const currentCheckIn = activeDay?.checkIn;
   const barrier = selectedBarrier(snapshot, selectedDay);
   const lapse = getLapseResponse(
@@ -233,7 +245,17 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
     const nextDay = snapshot.days[selectedDay - 1];
     setDraft(nextDay?.checkIn ?? undefined);
     setEditing(Boolean(nextDay?.checkIn));
+    setDraftDirty(false);
   }, [selectedDay]);
+
+  useEffect(() => {
+    if (!draftDirty || !draft) return;
+    try {
+      window.localStorage.setItem(draftStorageKey, JSON.stringify(draft));
+    } catch {
+      setErrorMessage("This browser could not save the check-in draft on this device.");
+    }
+  }, [draft, draftDirty, draftStorageKey]);
 
   async function mutate(operation: () => Promise<PatientSnapshot>): Promise<PatientSnapshot | undefined> {
     setErrorMessage(null);
@@ -249,9 +271,23 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
 
   function updateDraft(update: (current: CheckIn) => CheckIn) {
     setDraft((current) => current ? update(current) : current);
+    setDraftDirty(true);
   }
 
   function startCheckIn() {
+    setErrorMessage(null);
+    try {
+      const saved = window.localStorage.getItem(selectedDayDraftStorageKey);
+      const restored = saved ? parseOfflineCheckInDraft(JSON.parse(saved)) : null;
+      if (restored?.day === selectedDay) {
+        setDraft(restored);
+        setDraftDirty(true);
+        setEditing(true);
+        return;
+      }
+    } catch {
+      setErrorMessage("This browser could not read the saved check-in draft. You can still start a new check-in.");
+    }
     setDraft({
       day: selectedDay,
       symptoms: [],
@@ -259,8 +295,19 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
       intakePercent: 50,
       redFlags: [],
     });
+    setDraftDirty(true);
     setEditing(true);
-    setErrorMessage(null);
+  }
+
+  function cancelEdit() {
+    setDraft(currentCheckIn ?? undefined);
+    setDraftDirty(false);
+    setEditing(Boolean(currentCheckIn));
+    try {
+      window.localStorage.removeItem(selectedDayDraftStorageKey);
+    } catch {
+      setErrorMessage("The draft was closed, but this browser could not clear its saved copy.");
+    }
   }
 
   function saveCheckIn() {
@@ -270,6 +317,12 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
       if (updated) {
         setDraft(updated.days[selectedDay - 1]?.checkIn ?? draft);
         setEditing(true);
+        setDraftDirty(false);
+        try {
+          window.localStorage.removeItem(selectedDayDraftStorageKey);
+        } catch {
+          setErrorMessage("The check-in was saved, but this browser could not clear its local draft.");
+        }
       }
     });
   }
@@ -305,6 +358,16 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
     }));
   }
 
+  function askQuestion(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!question.trim()) return;
+    const latest = snapshot.days.reduce<CheckIn | undefined>(
+      (mostRecent, day) => day.checkIn && (!mostRecent || day.checkIn.day > mostRecent.day) ? day.checkIn : mostRecent,
+      undefined,
+    );
+    setQuestionResponse(answerQuestion(question, locale, latest));
+  }
+
   const dayLabel = (day: number) => text(locale, `Day ${day}`, `اليوم ${day}`);
   const canEdit = isLogged || isDraftStarted;
   const activePlanActions = isUrgent ? [] : dailyPlan.actions;
@@ -314,13 +377,22 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
       <header className="topbar">
         <div>
           <Link className="brand" href="/">OncoNourish</Link>
-          <span className="version">{text(locale, "Patient demo", "تجربة المريض")}</span>
+          <span className="version">{text(locale,
+            snapshot.mode === "demo" ? "Patient demo" : "Patient workspace",
+            snapshot.mode === "demo" ? "تجربة المريض" : "مساحة المريض",
+          )}</span>
         </div>
-        <span className="badge">{text(locale, "Synthetic data · not medical advice", "بيانات اصطناعية · ليست نصيحة طبية")}</span>
+        <div className="row">
+          <span className="badge">{text(locale, "Synthetic data · not medical advice", "بيانات اصطناعية · ليست نصيحة طبية")}</span>
+          {snapshot.mode === "supabase" && <form action={signOut}><button className="button small" type="submit">{text(locale, "Sign out", "تسجيل الخروج")}</button></form>}
+        </div>
       </header>
 
-      <nav className="daybar" aria-label={text(locale, "Demo day navigation", "التنقل بين أيام العرض")}>
-        <strong>{text(locale, "Demo day", "يوم العرض")}</strong>
+      <nav className="daybar" aria-label={text(locale,
+        snapshot.mode === "demo" ? "Demo day navigation" : "Cycle day navigation",
+        snapshot.mode === "demo" ? "التنقل بين أيام العرض" : "التنقل بين أيام الدورة",
+      )}>
+        <strong>{text(locale, snapshot.mode === "demo" ? "Demo day" : "Cycle day", snapshot.mode === "demo" ? "يوم العرض" : "يوم الدورة")}</strong>
         <button className="button small" type="button" disabled={selectedDay <= 1 || isPending} onClick={() => setSelectedDay((day) => Math.max(1, day - 1))}>
           {text(locale, "Previous", "السابق")}
         </button>
@@ -342,10 +414,13 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
         <button className="button small" type="button" disabled={selectedDay >= 14 || isPending} onClick={() => setSelectedDay((day) => Math.min(14, day + 1))}>
           {text(locale, "Next", "التالي")}
         </button>
-        <button className="button small primary" type="button" aria-pressed={playing} onClick={() => setPlaying((value) => !value)}>
+        {snapshot.mode === "demo" && <button className="button small primary" type="button" aria-pressed={playing} onClick={() => setPlaying((value) => !value)}>
           {playing ? text(locale, "Stop story", "إيقاف العرض") : text(locale, "Play story", "تشغيل العرض")}
-        </button>
-        <span className="day-hint">{text(locale, "Cycle 2 · Days 6–8 show a missed-check-in scenario.", "الدورة ٢ · الأيام ٦–٨ تعرض مثالًا على انقطاع التسجيل.")}</span>
+        </button>}
+        <span className="day-hint">{text(locale,
+          snapshot.mode === "demo" ? "Cycle 2 · Days 6–8 show a missed-check-in scenario." : "Choose a cycle day to review or record a check-in.",
+          snapshot.mode === "demo" ? "الدورة ٢ · الأيام ٦–٨ تعرض مثالًا على انقطاع التسجيل." : "اختاري يومًا لمراجعة التسجيل أو إضافته.",
+        )}</span>
       </nav>
 
       {errorMessage && <p className="error-banner" role="alert">{errorMessage}</p>}
@@ -356,7 +431,7 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
           <header className="patient-heading">
             <div>
               <span className="eyebrow">{text(locale, "OncoNourish", "أونكونوريش")}</span>
-              <h1>{text(locale, `Good morning, ${snapshot.patient.pseudonym.split(" ")[0]}`, `صباح الخير يا ليلى`)}</h1>
+              <h1>{text(locale, `Good morning, ${snapshot.patient.pseudonym.split(" ")[0]}`, "أهلًا بك")}</h1>
             </div>
             <div className="language-toggle" aria-label={text(locale, "Language", "اللغة")}>
               <button type="button" aria-pressed={!arabic} className={!arabic ? "selected" : ""} onClick={() => setLocale("en")}>EN</button>
@@ -365,7 +440,10 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
           </header>
 
           <div className="tag-row">
-            <span className="tag">{text(locale, `Cycle 2, day ${selectedDay}`, `الدورة ٢، اليوم ${selectedDay}`)}</span>
+            <span className="tag">{text(locale,
+              snapshot.mode === "demo" ? `Cycle 2, day ${selectedDay}` : `Cycle day ${selectedDay}`,
+              snapshot.mode === "demo" ? `الدورة ٢، اليوم ${selectedDay}` : `يوم الدورة ${selectedDay}`,
+            )}</span>
             <span className="tag ok">{phase.label[locale]}</span>
           </div>
 
@@ -375,7 +453,7 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
               <ul>
                 {approvedPlan.items.map((item) => <li key={item}>{actionLabels[locale][item]}</li>)}
               </ul>
-              <p className="muted small">{approvedPlan.note ?? text(locale, "Plan approved in the synthetic demo.", "تم اعتماد الخطة في العرض الاصطناعي.")}</p>
+              <p className="muted small">{approvedPlan.note ?? text(locale, "Approved by your care team.", "اعتمدها فريق الرعاية.")}</p>
             </section>
           )}
 
@@ -395,7 +473,7 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
                 <p className="small muted">{text(locale, "WhatsApp reminders are enabled, but this demo does not send messages.", "تذكيرات واتساب مفعّلة، لكن هذه التجربة لا ترسل رسائل.")}</p>
               )}
               {lapse.raiseRoutineFlag && (
-                <p className="small muted">{text(locale, "The lapse meets the placeholder threshold for a summary-only care-team flag; the M4 alert flow is not connected yet.", "يتوافق هذا الانقطاع مع حدّ مؤقت لتنبيه ملخص لفريق الرعاية؛ لم يُربط تدفق تنبيهات M4 بعد.")}</p>
+                <p className="small muted">{text(locale, "The lapse meets the placeholder threshold for a summary-only care-team flag.", "يتوافق هذا الانقطاع مع حدّ مؤقت لتنبيه ملخص لفريق الرعاية.")}</p>
               )}
             </section>
           )}
@@ -447,6 +525,10 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
               </div>
               {editing ? (
                 <>
+                  {draftDirty && <p className="status-message" role="status">{text(locale,
+                    "Unsaved draft is stored on this device only. Save it when you are online.",
+                    "تُحفظ المسودة غير المرسلة على هذا الجهاز فقط. احفظيها عند الاتصال بالإنترنت.",
+                  )}</p>}
                   <fieldset className="choice-group">
                     <legend>{text(locale, "Symptoms", "الأعراض")}</legend>
                     <div className="chip-row">
@@ -548,11 +630,9 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
                     <button className="button primary" disabled={isPending} onClick={saveCheckIn} type="button">
                       {text(locale, "Save check-in", "حفظ التسجيل")}
                     </button>
-                    {isLogged && (
-                      <button className="button" disabled={isPending} onClick={() => setEditing(false)} type="button">
-                        {text(locale, "Cancel", "إلغاء")}
-                      </button>
-                    )}
+                    <button className="button" disabled={isPending} onClick={cancelEdit} type="button">
+                      {text(locale, "Cancel", "إلغاء")}
+                    </button>
                   </div>
                 </>
               ) : (
@@ -650,6 +730,35 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
           )}
 
           <section className="card">
+            <h2>{text(locale, "Ask a nutrition question", "اسألي سؤالًا عن التغذية")}</h2>
+            <p className="muted small">{text(locale, "Questions are checked on this device and are not saved. Urgent symptoms receive an urgent response, never food advice.", "تُراجع الأسئلة على هذا الجهاز ولا تُحفظ. تحصل الأعراض العاجلة على استجابة عاجلة دون نصائح غذائية.")}</p>
+            <form className="question-form" onSubmit={askQuestion}>
+              <label htmlFor="nutrition-question">{text(locale, "Your question", "سؤالك")}</label>
+              <textarea
+                id="nutrition-question"
+                maxLength={2000}
+                onChange={(event) => setQuestion(event.currentTarget.value)}
+                placeholder={text(locale, "What can I eat when food tastes metallic?", "ماذا يمكنني أن آكل عندما يصبح مذاق الطعام معدنيًا؟")}
+                required
+                rows={3}
+                value={question}
+              />
+              <button className="button primary" disabled={!question.trim()} type="submit">
+                {text(locale, "Check question", "تحققي من السؤال")}
+              </button>
+            </form>
+            {questionResponse && (
+              <div className={`banner ${questionResponse.id === "G-URG" ? "critical" : questionResponse.id === "IN-SCOPE" ? "success" : "warning"}`} role={questionResponse.id === "G-URG" ? "alert" : "status"}>
+                <div className="row between"><strong>{questionResponse.category}</strong><span className="tag">{questionResponse.id}</span></div>
+                <p>{questionResponse.message}</p>
+                {questionResponse.options && questionResponse.options.length > 0 && (
+                  <ul>{questionResponse.options.map((option) => <li key={option.id}>{option.name}</li>)}</ul>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section className="card">
             <div className="section-heading">
               <h2>{text(locale, "Your controls", "إعداداتك")}</h2>
               <button
@@ -671,6 +780,17 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
                   <input checked={snapshot.consents.caregiver_access ?? false} disabled={isPending} onChange={(event) => saveConsent("caregiver_access", event.currentTarget.checked)} type="checkbox" />
                   <span>{text(locale, "Allow my caregiver to access check-ins", "السماح لمقدم الرعاية بالوصول إلى تسجيلاتي")}</span>
                 </label>
+                <p className="muted small">
+                  {snapshot.activeCaregiverLinks > 0
+                    ? text(locale,
+                      `${snapshot.activeCaregiverLinks} synthetic caregiver account(s) linked. Access also requires your consent.`,
+                      `تم ربط ${snapshot.activeCaregiverLinks} حساب رعاية اصطناعي. يتطلب الوصول موافقتك أيضًا.`,
+                    )
+                    : text(locale,
+                      "No caregiver account is linked yet. Ask the project administrator to create a synthetic link; this control alone does not grant access.",
+                      "لم يُربط حساب لمقدم رعاية بعد. اطلبي من مسؤول المشروع إنشاء رابط اصطناعي؛ هذا الخيار وحده لا يمنح الوصول.",
+                    )}
+                </p>
                 <label className="check-row">
                   <input checked={snapshot.consents.whatsapp_reminders ?? false} disabled={isPending} onChange={(event) => saveConsent("whatsapp_reminders", event.currentTarget.checked)} type="checkbox" />
                   <span>{text(locale, "WhatsApp reminder preference (nothing is sent)", "تفضيل تذكيرات واتساب (لا تُرسل رسائل)")}</span>
@@ -693,7 +813,10 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
               </>
             )}
           </section>
-          <footer className="patient-footer">{text(locale, "Synthetic demo data · Supportive care only · Not medical advice", "بيانات عرض اصطناعية · رعاية داعمة فقط · ليست نصيحة طبية")}</footer>
+          <footer className="patient-footer">{text(locale,
+            snapshot.mode === "demo" ? "Synthetic demo data · Supportive care only · Not medical advice" : "Synthetic Supabase test data · Supportive care only · Not medical advice",
+            snapshot.mode === "demo" ? "بيانات عرض اصطناعية · رعاية داعمة فقط · ليست نصيحة طبية" : "بيانات اختبار اصطناعية من Supabase · رعاية داعمة فقط · ليست نصيحة طبية",
+          )}</footer>
         </section>
 
         <aside className="engine-panel" aria-label={text(locale, "How the engine decided", "كيف اتخذ المحرك قراره")}>
@@ -713,7 +836,7 @@ export default function PatientExperience({ initialSnapshot }: { readonly initia
                   ? text(locale, `${activeDay?.missedDays}-day gap: smaller goal and barrier question.`, `انقطاع ${activeDay?.missedDays} أيام: هدف أصغر وسؤال عن العائق.`)
                   : text(locale, "No recent lapse return.", "لا توجد عودة بعد انقطاع مؤخرًا.")}</li>
                 <li>{text(locale, `Nutrition alert: ${alert.status} (${alert.metConditions}/3 conditions). Thresholds are placeholders.`, `تنبيه التغذية: ${localizeAlertStatus(alert.status, locale)} (${alert.metConditions}/٣ شروط). الحدود مؤقتة.`)}</li>
-                {lapse.raiseRoutineFlag && <li>{text(locale, "Engagement flag meets the illustrative rule; it has not been sent to a clinician.", "ينطبق شرط تنبيه التفاعل التوضيحي؛ لم يُرسل إلى طبيب.")}</li>}
+                {lapse.raiseRoutineFlag && <li>{text(locale, "Saving this check-in can make a summary available to your assigned clinician. No notification is sent.", "قد يتيح حفظ هذا التسجيل ملخصًا للطبيب المعيّن لك. لا يتم إرسال إشعار.")}</li>}
               </ul>
             ) : (
               <ul className="info-list">

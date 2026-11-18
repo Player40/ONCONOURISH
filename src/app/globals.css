@@ -17,6 +17,22 @@
   --font-ar: "Noto Sans Arabic", "Segoe UI", Tahoma, sans-serif;
 }
 
+.clinician-grid { display: grid; grid-template-columns: minmax(0, 19rem) minmax(0, 1fr); gap: 1rem; }
+.clinician-grid .card { margin-bottom: 1rem; }
+.clinician-patient { width: 100%; margin-bottom: .5rem; justify-content: space-between; }
+.clinician-patient[aria-current="page"] { border-color: var(--accent); }
+.clinician-form, .clinician-form label { display: grid; gap: .5rem; }
+.clinician-form fieldset { display: grid; gap: .5rem; border: 1px solid var(--line); min-width: 0; }
+.clinician-form .clinician-check { display: flex; align-items: center; gap: .65rem; min-height: 44px; }
+.clinician-form input:not([type="checkbox"]), .clinician-form textarea { width: 100%; min-height: 44px; font: inherit; }
+.clinician-form textarea:focus-visible { outline: 3px solid var(--accent); }
+.clinician-table { overflow-x: auto; }
+.clinician-table table { width: 100%; border-collapse: collapse; }
+.clinician-table th, .clinician-table td { text-align: left; padding: .5rem; border-block-end: 1px solid var(--line); }
+.clinician-table meter { width: 4rem; }
+.missed-day { background: repeating-linear-gradient(135deg, var(--surface), var(--surface) 5px, var(--surface-soft) 5px, var(--surface-soft) 10px); }
+@media (max-width: 760px) { .clinician-grid { grid-template-columns: minmax(0, 1fr); } }
+
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0e191c;
@@ -340,6 +356,11 @@ h3 {
   background: var(--accent-soft);
 }
 
+.banner.warning {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
 .banner.critical,
 .error-banner {
   border-color: var(--critical);
@@ -413,6 +434,27 @@ h3 {
   border-radius: 8px;
   background: var(--surface);
   color: var(--ink);
+}
+
+.question-form {
+  display: grid;
+  gap: 8px;
+  margin-block: 12px;
+}
+
+.question-form textarea {
+  width: 100%;
+  min-height: 88px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.question-form textarea:focus-visible {
+  outline: 3px solid var(--accent);
 }
 
 .check-row {

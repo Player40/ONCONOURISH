@@ -1,6 +1,5 @@
 import { DEMO_DAYS } from "@/data/days";
-import { DEMO_PATIENT_IDS } from "@/lib/demo-repository";
-import { getRepository } from "@/lib/repository-factory";
+import { DEMO_LAYLA_OWNER, DEMO_PATIENT_IDS, demoRepository } from "@/lib/demo-repository";
 import type {
   ActionRecord,
   BarrierRecord,
@@ -12,6 +11,7 @@ import type {
 } from "@/lib/repository";
 import { buildDailyPlan, evaluateCheckIn } from "@/engine";
 import type { ActionId, CheckIn } from "@/engine/types";
+import { getSession, hasAccessCookie } from "@/lib/session";
 
 export interface PatientDayView {
   readonly day: number;
@@ -24,20 +24,50 @@ export interface PatientDayView {
 
 export interface PatientSnapshot {
   readonly patient: Patient;
+  readonly mode: "demo" | "supabase";
   readonly activeDay: number;
   readonly days: readonly PatientDayView[];
   readonly consents: Partial<Record<ConsentPurpose, boolean>>;
+  readonly activeCaregiverLinks: number;
   readonly barriers: readonly BarrierRecord[];
   readonly plans: readonly Plan[];
   readonly ramadanRequests: readonly RamadanRequest[];
 }
 
-export function getPatientRepository(): Repository {
-  const { repository, mode } = getRepository({ demo: true });
-  if (mode !== "demo") {
-    throw new Error("The patient demo is restricted to synthetic demo mode.");
+export interface PatientContext {
+  readonly repository: Repository;
+  readonly patient: Patient;
+  readonly actorId: string;
+  readonly mode: "demo" | "supabase";
+  readonly usesDemoFixture: boolean;
+}
+
+export async function getPatientContext(): Promise<PatientContext> {
+  const session = await getSession();
+  if (!session && await hasAccessCookie()) {
+    throw new Error("Your sign-in is no longer valid. Return to the sign-in page and try again.");
   }
-  return repository;
+  if (!session || session.mode === "demo") {
+    const patient = (await demoRepository.listPatients()).find(({ id }) => id === DEMO_PATIENT_IDS.layla);
+    if (!patient) throw new Error("Synthetic patient not found.");
+    return {
+      repository: demoRepository,
+      patient,
+      actorId: DEMO_LAYLA_OWNER,
+      mode: "demo",
+      usesDemoFixture: true,
+    };
+  }
+  if (session.role !== "patient") throw new Error("Patient access is required to use this workspace.");
+  const patients = await session.repository.listPatients();
+  if (patients.length !== 1) throw new Error("This synthetic patient account must be linked to exactly one patient record.");
+  return {
+    repository: session.repository,
+    patient: patients[0],
+    actorId: session.actorId,
+    mode: "supabase",
+    usesDemoFixture: false,
+  };
 }
 
 function countMissedDays(checkIns: ReadonlyMap<number, CheckIn>, day: number): number {
@@ -63,27 +93,35 @@ function getActiveDay(day: number): number {
   return day;
 }
 
-export async function buildPatientSnapshot(repository: Repository, requestedDay = 9): Promise<PatientSnapshot> {
+export async function buildPatientSnapshot(
+  repository: Repository,
+  requestedDay = 9,
+  patientId: string = DEMO_PATIENT_IDS.layla,
+  mode: "demo" | "supabase" = "demo",
+  usesDemoFixture = mode === "demo",
+): Promise<PatientSnapshot> {
   const activeDay = getActiveDay(requestedDay);
   const [
     patients,
     checkIns,
     actionRecords,
     consents,
+    activeCaregiverLinks,
     barriers,
     plans,
     ramadanRequests,
   ] = await Promise.all([
     repository.listPatients(),
-    repository.listCheckIns(DEMO_PATIENT_IDS.layla),
-    repository.listActions(DEMO_PATIENT_IDS.layla),
-    repository.getConsents(DEMO_PATIENT_IDS.layla),
-    repository.listBarriers(DEMO_PATIENT_IDS.layla),
-    repository.listPlans(DEMO_PATIENT_IDS.layla),
-    repository.listRamadanRequests(DEMO_PATIENT_IDS.layla),
+    repository.listCheckIns(patientId),
+    repository.listActions(patientId),
+    repository.getConsents(patientId),
+    repository.countActiveCaregiverLinks(patientId),
+    repository.listBarriers(patientId),
+    repository.listPlans(patientId),
+    repository.listRamadanRequests(patientId),
   ]);
-  const patient = patients.find(({ id }) => id === DEMO_PATIENT_IDS.layla);
-  if (!patient) throw new Error("The synthetic Layla demo profile is unavailable.");
+  const patient = patients.find(({ id }) => id === patientId);
+  if (!patient) throw new Error("The patient profile is unavailable.");
 
   const checkInsByDay = new Map(checkIns.map((checkIn) => [checkIn.day, checkIn]));
   const barriersByDay = new Map(barriers.map((barrier) => [barrier.day, barrier]));
@@ -100,17 +138,17 @@ export async function buildPatientSnapshot(repository: Repository, requestedDay 
     const storedActions = actionsByDay.get(demoDay.day) ?? [];
     const barrier = barriersByDay.get(demoDay.day);
     const urgent = checkIn ? evaluateCheckIn(checkIn).urgent : false;
-    const generatedPlan = checkIn && !demoDay.logged && !urgent
+    const generatedPlan = checkIn && (!usesDemoFixture || !demoDay.logged) && !urgent
       ? buildDailyPlan({ missedDays, ...(barrier ? { selectedBarrier: barrier.barrier } : {}) })
       : undefined;
     const actionsOffered = urgent
       ? []
-      : demoDay.logged
+      : usesDemoFixture && demoDay.logged
       ? [...demoDay.actionsOffered]
       : generatedPlan?.actions.map(({ id }) => id) ?? [];
     const actionsCompleted = storedActions.length > 0
       ? storedActions.filter(({ done }) => done).map(({ actionType }) => actionType)
-      : demoDay.logged
+      : usesDemoFixture && demoDay.logged
         ? [...demoDay.actionsCompleted]
         : [];
 
@@ -126,9 +164,11 @@ export async function buildPatientSnapshot(repository: Repository, requestedDay 
 
   return {
     patient,
+    mode,
     activeDay,
     days,
     consents,
+    activeCaregiverLinks,
     barriers,
     plans,
     ramadanRequests,
@@ -136,5 +176,12 @@ export async function buildPatientSnapshot(repository: Repository, requestedDay 
 }
 
 export async function getPatientSnapshot(day = 9): Promise<PatientSnapshot> {
-  return buildPatientSnapshot(getPatientRepository(), day);
+  const context = await getPatientContext();
+  return buildPatientSnapshot(
+    context.repository,
+    day,
+    context.patient.id,
+    context.mode,
+    context.usesDemoFixture,
+  );
 }

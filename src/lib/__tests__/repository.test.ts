@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEMO_PATIENT_IDS, DemoRepository } from "@/lib/demo-repository";
+import { DEMO_CAREGIVER, DEMO_LAYLA_OWNER, DEMO_PATIENT_IDS, DemoRepository } from "@/lib/demo-repository";
 import { evaluateNutritionAlert } from "@/engine";
 import { getRepository } from "@/lib/repository-factory";
 import { SupabaseRepository } from "@/lib/supabase-repository";
@@ -46,6 +46,16 @@ describe("demo repository", () => {
     barriers[0].responseId = "changed";
     expect(await repository.getConsents(id)).toMatchObject({ caregiver_access: true });
     expect(await repository.listBarriers(id)).toEqual([{ day: 9, barrier: "tired", responseId: "tired" }]);
+  });
+
+  it("only exposes linked demo check-ins after the patient enables caregiver consent", async () => {
+    const repository = new DemoRepository();
+    const patientId = DEMO_PATIENT_IDS.layla;
+    expect(await repository.listCaregiverPatientIds(DEMO_CAREGIVER)).toEqual([]);
+    expect(await repository.countActiveCaregiverLinks(patientId)).toBe(1);
+    await repository.setConsent(patientId, "caregiver_access", true);
+    expect(await repository.listCaregiverPatientIds(DEMO_CAREGIVER)).toEqual([patientId]);
+    expect(await repository.listCaregiverPatientIds(DEMO_LAYLA_OWNER)).toEqual([]);
   });
 
   it("uses the engine to distinguish the synthetic stable and watch courses", async () => {

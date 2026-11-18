@@ -5,7 +5,7 @@
   "type": "module",
   "packageManager": "pnpm@12.16.1",
   "engines": {
-    "node": ">=26.13.1"
+    "node": "26.13.1"
   },
   "scripts": {
     "dev": "next dev",
@@ -13,6 +13,7 @@
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",
+    "eval": "node scripts/run-eval.mjs",
     "typecheck": "tsc --noEmit",
     "seed:sql": "node supabase/seed.mjs",
     "seed": "node supabase/apply-seed.mjs"

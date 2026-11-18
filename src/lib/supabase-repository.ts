@@ -1,6 +1,8 @@
 import { ACTION_IDS, BARRIER_IDS, RED_FLAG_IDS, SYMPTOM_IDS } from "@/engine/types";
 import type { CheckIn } from "@/engine/types";
 import type { ActionRecord, Alert, BarrierRecord, ConsentPurpose, Patient, Plan, RamadanRequest, Repository } from "./repository";
+import { WriteConflict, type CheckInWrite } from "./repository";
+import { ALLOWED_ROLES, type AppRole } from "@/data/roles";
 
 type Row = Record<string, unknown>;
 
@@ -94,6 +96,7 @@ function alert(value: unknown): Alert {
     kind: choice(item.kind, ["nutrition_decline", "engagement_drop", "red_flag"] as const),
     severity: string(item.severity), state: choice(item.state, ["open", "reviewed"] as const),
     evidence: item.evidence, createdAt: string(item.created_at),
+    reviewedBy: nullableString(item.reviewed_by), reviewedAt: nullableString(item.reviewed_at),
   };
 }
 
@@ -109,7 +112,7 @@ function ramadanRequest(value: unknown): RamadanRequest {
 export class SupabaseRepository implements Repository {
   private readonly base: string;
 
-  constructor(url: string, private readonly anonKey: string, private readonly accessToken: string) {
+  constructor(url: string, private readonly anonKey: string, private readonly accessToken: string, private readonly writerKey?: string) {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1"))) {
       throw new Error("Supabase URL must use HTTPS except on localhost.");
@@ -118,21 +121,28 @@ export class SupabaseRepository implements Repository {
     this.base = `${parsed.origin}/rest/v1`;
   }
 
-  private async request(table: string, query: Record<string, string>, method = "GET", body?: unknown, upsert = false): Promise<unknown[]> {
+  private async request(table: string, query: Record<string, string>, method = "GET", body?: unknown, upsert = false, writer = false): Promise<unknown[]> {
+    if (writer && !this.writerKey) throw new Error("Check-in writer is not configured.");
     const url = new URL(`${this.base}/${table}`);
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
     const response = await fetch(url, {
       method,
+      cache: "no-store",
       redirect: "error",
       headers: {
-        apikey: this.anonKey,
-        Authorization: `Bearer ${this.accessToken}`,
+        apikey: writer ? this.writerKey! : this.anonKey,
+        Authorization: `Bearer ${writer ? this.writerKey : this.accessToken}`,
         "Content-Type": "application/json",
         Prefer: upsert ? "resolution=merge-duplicates,return=representation" : "return=representation",
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (!response.ok) throw new Error(`Supabase ${method} ${table} failed (${response.status}): ${await response.text()}`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => null);
+      if (response.status === 409 || error?.code === "40001" ||
+          (table === "plans" && error?.code === "23514")) throw new WriteConflict();
+      throw new Error(`Supabase ${method} ${table} failed (${response.status}).`);
+    }
     const result: unknown = await response.json();
     if (!Array.isArray(result)) throw new Error(`Supabase ${table} returned an invalid response.`);
     return result;
@@ -140,9 +150,14 @@ export class SupabaseRepository implements Repository {
 
   private async write(table: string, query: Record<string, string>, method: string, body: unknown, upsert = false): Promise<void> {
     const result = await this.request(table, query, method, body, upsert);
+    if (method === "PATCH" && result.length === 0) throw new WriteConflict(`Supabase ${table} write affected 0 rows.`);
     if (result.length !== 1) throw new Error(`Supabase ${table} write affected ${result.length} rows.`);
   }
 
+  async getRole(userId: string): Promise<AppRole | null> {
+    const [profile] = await this.request("profiles", { select: "role", id: `eq.${userId}` });
+    return profile ? choice(row(profile).role, ALLOWED_ROLES) : null;
+  }
   async listPatients(): Promise<Patient[]> {
     return (await this.request("patients", { select: "id,pseudonym,dx,regimen,cycle_start,baseline_weight_kg,targets,likes,budget,locale" })).map(patient);
   }
@@ -154,6 +169,16 @@ export class SupabaseRepository implements Repository {
       patient_id: patientId, day: input.day, symptoms: input.symptoms, red_flags: input.redFlags ?? [],
       appetite: input.appetite, intake_pct: input.intakePercent, weight_kg: input.weightKg ?? null,
     }, true);
+  }
+  async recordCheckIn({ patientId, actorId, previous, checkIn: input, signals }: CheckInWrite): Promise<Alert[]> {
+    const serialize = (entry: CheckIn) => ({
+      day: entry.day, symptoms: entry.symptoms, red_flags: entry.redFlags ?? [],
+      appetite: entry.appetite, intake_pct: entry.intakePercent, weight_kg: entry.weightKg ?? null,
+    });
+    return (await this.request("rpc/record_engine_checkin", {}, "POST", {
+      target: patientId, owner_id: actorId, expected: previous.map(serialize),
+      entry: serialize(input), signals,
+    }, false, true)).map(alert);
   }
   async getConsents(patientId: string): Promise<Partial<Record<ConsentPurpose, boolean>>> {
     const result: Partial<Record<ConsentPurpose, boolean>> = {};
@@ -167,6 +192,20 @@ export class SupabaseRepository implements Repository {
     await this.write("consents", { on_conflict: "patient_id,purpose" }, "POST", {
       patient_id: patientId, purpose, granted, updated_at: new Date().toISOString(),
     }, true);
+  }
+  async countActiveCaregiverLinks(patientId: string): Promise<number> {
+    return (await this.request("caregiver_links", {
+      select: "caregiver_user_id",
+      patient_id: `eq.${patientId}`,
+      active: "eq.true",
+    })).length;
+  }
+  async listCaregiverPatientIds(caregiverUserId: string): Promise<string[]> {
+    return (await this.request("caregiver_links", {
+      select: "patient_id",
+      caregiver_user_id: `eq.${caregiverUserId}`,
+      active: "eq.true",
+    })).map((value) => string(row(value).patient_id));
   }
   async listBarriers(patientId: string): Promise<BarrierRecord[]> {
     return (await this.request("barrier_events", { select: "day,barrier,response_id", patient_id: `eq.${patientId}` })).map((value) => {
@@ -197,7 +236,12 @@ export class SupabaseRepository implements Repository {
     });
   }
   async listAlerts(patientId: string): Promise<Alert[]> {
-    return (await this.request("alerts", { select: "id,patient_id,kind,severity,state,evidence,created_at", patient_id: `eq.${patientId}` })).map(alert);
+    return (await this.request("alerts", { select: "id,patient_id,kind,severity,state,evidence,created_at,reviewed_by,reviewed_at", patient_id: `eq.${patientId}` })).map(alert);
+  }
+  async reviewAlert(patientId: string, alertId: string, reviewedBy: string, reviewedAt: string): Promise<void> {
+    await this.write("alerts", { id: `eq.${alertId}`, patient_id: `eq.${patientId}`, state: "eq.open" }, "PATCH", {
+      state: "reviewed", reviewed_by: reviewedBy, reviewed_at: reviewedAt,
+    });
   }
   async listRamadanRequests(patientId: string): Promise<RamadanRequest[]> {
     return (await this.request("ramadan_requests", { select: "id,patient_id,status,decided_by,decided_at", patient_id: `eq.${patientId}` })).map(ramadanRequest);
