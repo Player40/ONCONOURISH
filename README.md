@@ -91,4 +91,44 @@ pnpm typecheck
 pnpm build
 ```
 
-The home page is only a build scaffold; patient and clinician UI, persistence, API routes, and evaluation reporting are not part of M1.
+The home page is only a build scaffold; patient and clinician UI, API routes,
+and evaluation reporting are not yet implemented.
+
+## M2 persistence and demo setup
+
+The M2 migration is in `supabase/migrations/`; the shared M3/M4 contracts and
+current limitations are in `docs/M2_CONTRACTS.md`. All data is synthetic.
+Clinical thresholds and food values are placeholders pending review.
+
+Copy `.env.example` to `.env.local` for local configuration. The URL and anon
+key are public configuration, not service-role credentials. A Supabase
+repository must also receive the signed-in user's access token from the
+server-side auth flow; no sign-in screen is implemented yet. Do not put a
+service-role key in the browser or commit credentials.
+
+`getRepository` selects demo mode when explicitly requested or when the URL,
+anon key, and access token are all absent. Partial configuration or a missing
+access token when Supabase is configured raises an error rather than silently
+falling back. The in-memory demo repository is shared only within one server
+runtime; it is reset on restart and is neither durable nor a security
+boundary. It is not suitable for real patient data.
+
+To apply the migration, generate synthetic seed data, and run SQL tests, use
+**only a dedicated disposable Supabase test project** or a suitable local
+Supabase database. Configure `DATABASE_URL` locally without sharing it in chat.
+The SQL tests use transactions and roll back their own fixtures; the migration
+and seed persist changes.
+
+```sh
+PGDATABASE="$DATABASE_URL" psql -v ON_ERROR_STOP=1 -f supabase/migrations/202611180001_m2_persistence.sql
+pnpm seed
+PGDATABASE="$DATABASE_URL" psql -v ON_ERROR_STOP=1 -f supabase/tests/policies.sql
+```
+
+The seed creates synthetic Auth records with no login credentials; demo login
+is future work. It uses the 23 foods in M1's actual prototype source, not an
+invented 24th item. It is idempotent for its own fixed IDs and does not
+overwrite existing records. SQL access tests must run against a database with
+Supabase Auth roles and `auth.uid()`; a passing in-memory demo does not verify
+RLS. The de-identified measurement view exposes only day-level aggregates with
+at least five consenting check-ins; it is not a guarantee of anonymity.

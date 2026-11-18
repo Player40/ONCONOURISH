@@ -13,7 +13,9 @@
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "seed:sql": "node supabase/seed.mjs",
+    "seed": "node supabase/apply-seed.mjs"
   },
   "dependencies": {
     "next": "16.4.6",
