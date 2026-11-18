@@ -1,3 +1,6 @@
 /AgentPrompt_legacy.md
 /Misc
 /Scratch.md
+/node_modules/
+/.next/
+*.tsbuildinfo

@@ -71,3 +71,24 @@ Backend & Analytics	Firebase or Supabase	Handles user profiles, treatment timeli
 
 
 ## Standards
+
+## M1 engine foundation
+
+The current implementation milestone adds a minimal Next.js scaffold and a typed, deterministic TypeScript engine. The engine is pure TypeScript and uses synthetic demo data only; food nutrition values, phase windows, and alert thresholds are placeholders that have not been clinically reviewed.
+
+The prototype currently contains 23 food entries, although the build brief refers to 24. M1 ports the entries actually present in `reference/prototype.html` and does not invent an additional food item.
+
+Arabic strings in the ported data and engine—including food labels, barriers, guardrail patterns/responses, and urgent messages—are machine-drafted and require native-speaker and clinical review before use.
+
+The three-day routine engagement flag intentionally differs from the static prototype: it requires the last logged intake before the gap to be below 60%. Exactly 60%, or no logged intake, does not raise the flag.
+
+Pinned toolchain: Node.js 26.13.1, pnpm 12.16.1, Next.js 16.4.6, TypeScript 5.9.3, and Vitest 5.1.1.
+
+```sh
+pnpm install
+pnpm test
+pnpm typecheck
+pnpm build
+```
+
+The home page is only a build scaffold; patient and clinician UI, persistence, API routes, and evaluation reporting are not part of M1.

@@ -1,17 +1,19 @@
-# ONCONOURISH: BUILD BRIEF FOR THE IDE AGENT
+# ONCONOURISH: PRODUCT AND BUILD BRIEF
 
-You are building the working prototype for a hackathon entry. Read this whole brief before writing code. Work in milestones, run tests at each one, and report real results only.
+This file is the full product brief and requirements reference, not a request to implement the entire product in one pass. Use [AGENT_MILESTONES.md](./AGENT_MILESTONES.md) to choose the next milestone, then give each agent only its assigned prompt from [agent-prompts/](./agent-prompts/). Start a milestone only after its prerequisites are met; M3 and M4 can run in parallel once M1 and M2 have fixed the shared contracts.
+
+The shared agent instructions are in [agent-prompts/README.md](./agent-prompts/README.md). [AgentPrompt_legacy.md](../AgentPrompt_legacy.md) is historical context, not an implementation spec. When this brief and the prototype disagree, follow explicit safety and privacy requirements in this brief; otherwise preserve the prototype's UX, content, and rule behavior, and document any necessary deviation.
 
 ## 0. Setup before you start
 
-1. Put the clickable prototype file at `reference/prototype.html` (it is the `index.html` from our GitHub Pages repo). Open it and read its `<script>`. It is the **source of truth for UX and for the rule logic**. Port data and rules from it faithfully: `FOODS`, `DAYS`, `SYM`, `RED`, `BARR`, `GUARD`, `recommend()`, `alertFor()`, `phaseOf()`, `planItems()`, `worked()`, `meas()`.
+1. Open [prototype.html](./prototype.html) and read its `<script>`. It is the **source of truth for UX and for the rule logic**, subject to the precedence rule above and the documented engagement-alert exception in section 4. Port data and rules from it faithfully: `FOODS`, `DAYS`, `SYM`, `RED`, `BARR`, `GUARD`, `recommend()`, `alertFor()`, `phaseOf()`, `planItems()`, `worked()`, `meas()`.
 2. Do not redesign the UX. Match its screens, wording and behaviour, then improve structure, types and persistence.
-3. Before coding, output a short plan and a file tree. Then proceed.
+3. Follow the milestone prompt you were given.
 
 ## 1. What this is
 
 **Product:** OncoNourish, a behaviour-first nutrition companion for people in cancer treatment, with a dietitian safety net.
-**Competition:** Future Health Digital Innovation Challenge (Abu Dhabi), Challenge 09 "Sustaining Healthy Behaviors". Submission is due **Friday 20 November 2026**. We have about two days.
+**Competition:** Future Health Digital Innovation Challenge (Abu Dhabi), Challenge 09 "Sustaining Healthy Behaviors". Submission is due **Friday 20 November 2026**; aim to be feature-complete **Thursday evening, 19 November**.
 **Judging areas (no published weights):** health impact and clinical relevance; technical depth and architecture; working solution and demo; Responsible AI, safety and governance; scalability and deployment readiness; commercial viability and path to pilot.
 **The brief's five requirements, which the product must visibly satisfy:**
 1. Adaptive personal plans: small, achievable actions from goals, preferences, health context.
@@ -71,6 +73,7 @@ Implement as pure functions with explicit types.
 - **Ranking:** port the scoring from `recommend()`. Return the top 3, at most 2 liquids. Every pick returns reasons for the "Why this?" panel plus technique and limit text.
 - **Daily micro-plan:** three small actions (fortified drink by 10:00, small snack every 2 to 3 hours, sip fluids hourly). If a lapse of 2+ days just ended or the user chose a barrier, **shrink to one action**.
 - **Lapse detector and re-engagement ladder:** missed run 1 = gentle nudge; 2 = shrink goal and offer WhatsApp **only if the user enabled it**; 3 = routine flag to the clinician (summary only) when the last logged intake was below 60%. Caregiver contact only with explicit consent. On return after 2+ missed days: "Welcome back, no catching up needed" plus the barrier question.
+  - **Intentional prototype deviation:** the prototype displays a routine flag for any gap of three or more days; the app requires a last logged intake below 60%. Exactly 60% or no last logged intake does not qualify.
 - **Barriers and responses:** port `BARR` (nausea, taste, tired, cost, forgot, guilt) with technique labels. Labels follow the BCT Taxonomy style and need behavioural-scientist review (docs).
 - **Progress bank:** count of check-ins, never decreases. **"What has worked for you":** per action type, completed over offered, shown as simple explainable stats. No black-box learning.
 - **Alert engine (explainable, placeholder thresholds):** fires only when **all** hold: (a) mean intake over the last 3 logged days is below 60% of target; (b) weight down 2.0% or more from baseline; (c) the same symptom (excluding steroid hunger) on 3 or more of the last 7 check-ins. "Watch" when exactly 2 hold. Store `evidence` JSON with each condition's value and source days. Thresholds live in config and are labelled placeholders.
@@ -152,21 +155,21 @@ State plainly what was built during the challenge and what is roadmap (WhatsApp 
 - Malnutrition affects roughly 20% to over 70% of cancer patients depending on setting, and an estimated 10 to 20% of cancer deaths are attributable to malnutrition rather than the malignancy (ESPEN expert group recommendations, 2017).
 - Malnutrition is associated with lower chemotherapy tolerance, more infections and higher mortality (observational; same source).
 - Nutritional counselling during chemotherapy has been found feasible and safe with preliminary benefit, from small early-phase trials (Curr Oncol 2024 systematic review, PMC11764068).
-- A meta-analysis found no evidence that neutropenic diets reduce infection and advised standard safe food-handling (Mayo Clinic Proceedings, 2019).
+- A meta-analysis of 6 studies with 1,116 patients found no evidence that neutropenic diets reduce infection and advised standard safe food-handling (Sonbol et al., *BMJ Supportive & Palliative Care*, 2019;9(4):425–433, [doi:10.1136/bmjspcare-2018-001742](https://doi.org/10.1136/bmjspcare-2018-001742)).
 - UAE, GLOBOCAN 2024: 8,815 new cancer cases, 3,814 deaths, 29,704 five-year prevalent cases.
 - Not claimed: that this app prevents treatment interruptions, improves survival, or that any diet treats cancer.
 
 ## 12. Working method and time-box
 
-1. **M1 (tonight):** scaffold, ported data and engine with unit tests, `pnpm test` green.
+1. **M1:** scaffold with pinned Node, pnpm, and Next.js versions; ported data and engine with unit tests, `pnpm test` green.
 2. **M2:** migrations, RLS, seed, repositories, demo-mode fallback.
 3. **M3:** patient app complete with i18n and RTL.
 4. **M4:** clinician dashboard, approval flow, export.
-5. **M5:** measurement, safety and about pages; `pnpm eval` and `EVAL_REPORT.md`.
-6. **M6:** docs, deployment, polish, demo script.
+5. **M5:** measurement and safety pages; `pnpm eval` and `EVAL_REPORT.md`. Start after the combined M3/M4 integration gate in the [milestone roadmap](./AGENT_MILESTONES.md).
+6. **M6:** about page, docs, deployment, polish, demo script.
 7. Optional: LLM wording layer.
 
-After each milestone: run tests and build, commit with a clear message, and print a short status. If you are behind, **cut in this order**: LLM layer, PDF export (keep CSV), Arabic beyond the patient screens, measurement page polish. **Never cut:** the engine with tests, the patient loop with lapse recovery, the clinician alert and approval flow, RLS, the evaluation report, the limitations document.
+After each milestone, run its required checks and report a short status with actual results and remaining blockers. Do not commit unless the user explicitly asks. If you are behind, **cut in this order**: LLM layer, PDF export (keep CSV), Arabic beyond the patient screens, measurement page polish. **Never cut:** the engine with tests, the patient loop with lapse recovery, the clinician alert and approval flow, RLS, the evaluation report, the limitations document.
 
 ## 13. Definition of done
 
@@ -176,5 +179,3 @@ After each milestone: run tests and build, commit with a clear message, and prin
 - [ ] Urgent path shows no food advice and no model call.
 - [ ] Docs written; placeholders and limitations stated plainly; no unsourced clinical claim anywhere.
 - [ ] Repo contains no secrets and no real personal data.
-
-Start by outputting your plan and file tree.
